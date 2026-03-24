@@ -1,0 +1,8 @@
+# Ignore visual studio code environment
+.vscode/
+
+# Ignore image files since they are just test data and can be heavy 
+*.jpg
+*.jpeg
+*.png
+*.bmp
