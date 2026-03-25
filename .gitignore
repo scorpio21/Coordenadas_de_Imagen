@@ -15,3 +15,10 @@ Coordenadas.md
 *.zip
 *.rar
 .ps1_xml
+
+# Ignorados C# / .NET / Visual Studio
+[Bb]in/
+[Oo]bj/
+.vs/
+*.user
+*.suo
