@@ -13,7 +13,9 @@ namespace CoordenadasImagen.Services
     public class ImageScannerService
     {
         /// <summary>
-        /// Algoritmo Inteligente por proyección en X e Y (Ideal para .png y .jpg)
+        /// Algoritmo Inteligente por proyección en X e Y (Ideal para .png y .jpg).
+        /// La proyección X se realiza de forma LOCAL por cada franja Y detectada,
+        /// permitiendo segmentar correctamente sprites en filas con posiciones X distintas.
         /// </summary>
         public BoundsRecord[] GetRectanglesSmart(string imagePath)
         {
@@ -21,139 +23,97 @@ namespace CoordenadasImagen.Services
             using (Bitmap originalBmp = new Bitmap(sourceBmp.Width, sourceBmp.Height, PixelFormat.Format32bppArgb))
             {
                 using (Graphics g = Graphics.FromImage(originalBmp))
-                {
                     g.DrawImage(sourceBmp, 0, 0);
-                }
 
                 Rectangle rectLock = new Rectangle(0, 0, originalBmp.Width, originalBmp.Height);
                 BitmapData bmpData = originalBmp.LockBits(rectLock, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
-                int bytesPerPixel = 4;
-                int byteCount = Math.Abs(bmpData.Stride) * originalBmp.Height;
-                byte[] pixels = new byte[byteCount];
-                Marshal.Copy(bmpData.Scan0, pixels, 0, byteCount);
+                int stride = bmpData.Stride;
+                int bpp = 4;
+                byte[] pixels = new byte[Math.Abs(stride) * originalBmp.Height];
+                Marshal.Copy(bmpData.Scan0, pixels, 0, pixels.Length);
                 originalBmp.UnlockBits(bmpData);
 
                 int width = originalBmp.Width;
                 int height = originalBmp.Height;
 
+                // Muestras de color de fondo en los 4 bordes
                 List<Color> bgColors = new List<Color>();
-                // Tomamos muestras en los bordes para detectar el color de fondo
                 for (int x = 0; x < width; x += 10)
                 {
-                    int p1 = (x * bytesPerPixel);
+                    int p1 = x * bpp;
                     bgColors.Add(Color.FromArgb(pixels[p1 + 2], pixels[p1 + 1], pixels[p1]));
-                    int p2 = ((height - 1) * bmpData.Stride) + (x * bytesPerPixel);
+                    int p2 = ((height - 1) * stride) + (x * bpp);
                     bgColors.Add(Color.FromArgb(pixels[p2 + 2], pixels[p2 + 1], pixels[p2]));
                 }
                 for (int y = 0; y < height; y += 10)
                 {
-                    int p1 = (y * bmpData.Stride);
+                    int p1 = y * stride;
                     bgColors.Add(Color.FromArgb(pixels[p1 + 2], pixels[p1 + 1], pixels[p1]));
-                    int p2 = (y * bmpData.Stride) + ((width - 1) * bytesPerPixel);
+                    int p2 = (y * stride) + ((width - 1) * bpp);
                     bgColors.Add(Color.FromArgb(pixels[p2 + 2], pixels[p2 + 1], pixels[p2]));
                 }
 
-                bool[] colHasFg = new bool[width];
+                // Determina si un pixel es de fondo según el umbral de color
+                bool EsFondo(int x, int y)
+                {
+                    int off = (y * stride) + (x * bpp);
+                    byte b = pixels[off], gc = pixels[off + 1], r = pixels[off + 2];
+                    foreach (var bg in bgColors)
+                    {
+                        int dr = r - bg.R, dg = gc - bg.G, db = b - bg.B;
+                        if (dr * dr + dg * dg + db * db < 150) return true;
+                    }
+                    return false;
+                }
+
+                // Paso 1: Proyección global en Y → detección de franjas horizontales
                 bool[] rowHasFg = new bool[height];
-
                 for (int y = 0; y < height; y++)
-                {
-                    int rowOffset = y * bmpData.Stride;
                     for (int x = 0; x < width; x++)
-                    {
-                        int pixelOffset = rowOffset + (x * bytesPerPixel);
-                        byte b = pixels[pixelOffset];
-                        byte gCol = pixels[pixelOffset + 1];
-                        byte red = pixels[pixelOffset + 2];
-
-                        bool isBg = false;
-                        foreach (var bg in bgColors)
-                        {
-                            int dr = red - bg.R;
-                            int dg = gCol - bg.G;
-                            int db = b - bg.B;
-                            // Umbral muy estricto para no comerse las sombras de los dibujos
-                            if (dr * dr + dg * dg + db * db < 150)
-                            {
-                                isBg = true;
-                                break;
-                            }
-                        }
-                        if (!isBg)
-                        {
-                            colHasFg[x] = true;
-                            rowHasFg[y] = true;
-                        }
-                    }
-                }
-
-                List<Point> xRanges = new List<Point>();
-                int curStartX = -1;
-                for (int x = 0; x < width; x++)
-                {
-                    if (colHasFg[x])
-                    {
-                        if (curStartX == -1) curStartX = x;
-                    }
-                    else
-                    {
-                        if (curStartX != -1)
-                        {
-                            xRanges.Add(new Point(curStartX, x - curStartX));
-                            curStartX = -1;
-                        }
-                    }
-                }
-                if (curStartX != -1) xRanges.Add(new Point(curStartX, width - curStartX));
+                        if (!EsFondo(x, y)) { rowHasFg[y] = true; break; }
 
                 List<Point> yRanges = new List<Point>();
                 int curStartY = -1;
                 for (int y = 0; y < height; y++)
                 {
-                    if (rowHasFg[y])
-                    {
-                        if (curStartY == -1) curStartY = y;
-                    }
-                    else
-                    {
-                        if (curStartY != -1)
-                        {
-                            yRanges.Add(new Point(curStartY, y - curStartY));
-                            curStartY = -1;
-                        }
-                    }
+                    if (rowHasFg[y]) { if (curStartY == -1) curStartY = y; }
+                    else { if (curStartY != -1) { yRanges.Add(new Point(curStartY, y - curStartY)); curStartY = -1; } }
                 }
                 if (curStartY != -1) yRanges.Add(new Point(curStartY, height - curStartY));
 
                 List<BoundsRecord> results = new List<BoundsRecord>();
                 int rowIdx = 1;
 
+                // Paso 2: Por cada franja Y, proyección LOCAL en X → columnas dentro de la franja
                 foreach (var yR in yRanges)
                 {
+                    int yStart = yR.X;
+                    int yEnd = yR.X + yR.Y;
+
+                    bool[] colHasFgLocal = new bool[width];
+                    for (int y = yStart; y < yEnd; y++)
+                        for (int x = 0; x < width; x++)
+                            if (!EsFondo(x, y)) colHasFgLocal[x] = true;
+
+                    List<Point> xRanges = new List<Point>();
+                    int curStartX = -1;
+                    for (int x = 0; x < width; x++)
+                    {
+                        if (colHasFgLocal[x]) { if (curStartX == -1) curStartX = x; }
+                        else { if (curStartX != -1) { xRanges.Add(new Point(curStartX, x - curStartX)); curStartX = -1; } }
+                    }
+                    if (curStartX != -1) xRanges.Add(new Point(curStartX, width - curStartX));
+
                     int colIdx = 1;
                     foreach (var xR in xRanges)
                     {
+                        int xEnd = xR.X + xR.Y;
+                        int tMinX = xEnd, tMinY = yEnd, tMaxX = xR.X, tMaxY = yStart;
                         bool hasFg = false;
-                        int endX = xR.X + xR.Y;
-                        int endY = yR.X + yR.Y;
-                        int tMinX = endX, tMinY = endY, tMaxX = xR.X, tMaxY = yR.X;
 
-                        for (int y = yR.X; y < endY; y++)
-                        {
-                            int rowOffset = y * bmpData.Stride;
-                            for (int x = xR.X; x < endX; x++)
-                            {
-                                int pixelOffset = rowOffset + (x * bytesPerPixel);
-                                byte b = pixels[pixelOffset];
-                                byte gCol = pixels[pixelOffset + 1];
-                                byte red = pixels[pixelOffset + 2];
-                                bool isBg = false;
-                                foreach (var bg in bgColors)
-                                {
-                                    int dr = red - bg.R; int dg = gCol - bg.G; int db = b - bg.B;
-                                    if (dr * dr + dg * dg + db * db < 150) { isBg = true; break; }
-                                }
-                                if (!isBg)
+                        for (int y = yStart; y < yEnd; y++)
+                            for (int x = xR.X; x < xEnd; x++)
+                                if (!EsFondo(x, y))
                                 {
                                     hasFg = true;
                                     if (x < tMinX) tMinX = x;
@@ -161,8 +121,7 @@ namespace CoordenadasImagen.Services
                                     if (y < tMinY) tMinY = y;
                                     if (y > tMaxY) tMaxY = y;
                                 }
-                            }
-                        }
+
                         if (hasFg)
                         {
                             results.Add(new BoundsRecord
@@ -192,16 +151,14 @@ namespace CoordenadasImagen.Services
             using (Bitmap originalBmp = new Bitmap(sourceBmp.Width, sourceBmp.Height, PixelFormat.Format32bppArgb))
             {
                 using (Graphics g = Graphics.FromImage(originalBmp))
-                {
                     g.DrawImage(sourceBmp, 0, 0);
-                }
 
                 Rectangle rectLock = new Rectangle(0, 0, originalBmp.Width, originalBmp.Height);
                 BitmapData bmpData = originalBmp.LockBits(rectLock, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
-                int bytesPerPixel = 4;
-                int byteCount = Math.Abs(bmpData.Stride) * originalBmp.Height;
-                byte[] pixels = new byte[byteCount];
-                Marshal.Copy(bmpData.Scan0, pixels, 0, byteCount);
+                int stride = bmpData.Stride;
+                int bpp = 4;
+                byte[] pixels = new byte[Math.Abs(stride) * originalBmp.Height];
+                Marshal.Copy(bmpData.Scan0, pixels, 0, pixels.Length);
                 originalBmp.UnlockBits(bmpData);
 
                 int width = originalBmp.Width;
@@ -210,16 +167,16 @@ namespace CoordenadasImagen.Services
                 List<Color> bgColors = new List<Color>();
                 for (int x = 0; x < width; x += 10)
                 {
-                    int p1 = (x * bytesPerPixel);
+                    int p1 = x * bpp;
                     bgColors.Add(Color.FromArgb(pixels[p1 + 2], pixels[p1 + 1], pixels[p1]));
-                    int p2 = ((height - 1) * bmpData.Stride) + (x * bytesPerPixel);
+                    int p2 = ((height - 1) * stride) + (x * bpp);
                     bgColors.Add(Color.FromArgb(pixels[p2 + 2], pixels[p2 + 1], pixels[p2]));
                 }
                 for (int y = 0; y < height; y += 10)
                 {
-                    int p1 = (y * bmpData.Stride);
+                    int p1 = y * stride;
                     bgColors.Add(Color.FromArgb(pixels[p1 + 2], pixels[p1 + 1], pixels[p1]));
-                    int p2 = (y * bmpData.Stride) + ((width - 1) * bytesPerPixel);
+                    int p2 = (y * stride) + ((width - 1) * bpp);
                     bgColors.Add(Color.FromArgb(pixels[p2 + 2], pixels[p2 + 1], pixels[p2]));
                 }
 
@@ -233,37 +190,24 @@ namespace CoordenadasImagen.Services
                     {
                         int startX = (int)(c * cellW);
                         int startY = (int)(r * cellH);
-                        int endX = (int)((c + 1) * cellW);
-                        int endY = (int)((r + 1) * cellH);
-
-                        if (endX > width) endX = width;
-                        if (endY > height) endY = height;
+                        int endX = Math.Min((int)((c + 1) * cellW), width);
+                        int endY = Math.Min((int)((r + 1) * cellH), height);
 
                         int minX = endX, minY = endY, maxX = startX, maxY = startY;
 
                         for (int y = startY; y < endY; y++)
                         {
-                            int rowOffset = y * bmpData.Stride;
+                            int rowOffset = y * stride;
                             for (int x = startX; x < endX; x++)
                             {
-                                int pixelOffset = rowOffset + (x * bytesPerPixel);
-                                byte b = pixels[pixelOffset];
-                                byte gCol = pixels[pixelOffset + 1];
-                                byte red = pixels[pixelOffset + 2];
-
+                                int off = rowOffset + (x * bpp);
+                                byte b = pixels[off], gc = pixels[off + 1], red = pixels[off + 2];
                                 bool isBg = false;
                                 foreach (var bg in bgColors)
                                 {
-                                    int dr = red - bg.R;
-                                    int dg = gCol - bg.G;
-                                    int db = b - bg.B;
-                                    if (dr * dr + dg * dg + db * db < 800)
-                                    {
-                                        isBg = true;
-                                        break;
-                                    }
+                                    int dr = red - bg.R, dg = gc - bg.G, db = b - bg.B;
+                                    if (dr * dr + dg * dg + db * db < 800) { isBg = true; break; }
                                 }
-
                                 if (!isBg)
                                 {
                                     if (x < minX) minX = x;

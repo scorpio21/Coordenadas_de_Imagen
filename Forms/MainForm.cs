@@ -181,14 +181,14 @@ namespace CoordenadasImagen.Forms
 
         private void PictureBox1_MouseDown(object sender, MouseEventArgs e)
         {
-            if (string.IsNullOrEmpty(_loadedFilename) || !chkManual.Checked) return;
+            if (string.IsNullOrEmpty(_loadedFilename) || !chkManual.Checked || _originalBmp == null) return;
             _isDrawing = true;
             _rectStartImg = CoordinateUtils.GetImagePos(pictureBox1, _originalBmp, e.X, e.Y);
         }
 
         private void PictureBox1_MouseMove(object sender, MouseEventArgs e)
         {
-            if (_isDrawing)
+            if (_isDrawing && _originalBmp != null)
             {
                 _currentMouseImg = CoordinateUtils.GetImagePos(pictureBox1, _originalBmp, e.X, e.Y);
                 pictureBox1.Invalidate();
@@ -197,7 +197,7 @@ namespace CoordenadasImagen.Forms
 
         private void PictureBox1_MouseUp(object sender, MouseEventArgs e)
         {
-            if (_isDrawing)
+            if (_isDrawing && _originalBmp != null)
             {
                 _isDrawing = false;
                 _currentMouseImg = CoordinateUtils.GetImagePos(pictureBox1, _originalBmp, e.X, e.Y);
