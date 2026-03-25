@@ -14,8 +14,8 @@ namespace CoordenadasImagen.Services
     {
         // Separación mínima en píxeles para considerar que dos sprites son distintos.
         // Gaps menores a este valor se fusionan (evita fragmentación por armas o accesorios).
-        private const int GapMinimoX = 12;
-        private const int GapMinimoY = 8;
+        private const int GapMinimoX = 5;
+        private const int GapMinimoY = 4;
 
         // Tamaño mínimo de un rango para descartarlo como ruido
         private const int AnchoMinimo = 15;
