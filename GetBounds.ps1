@@ -1,158 +1,179 @@
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$ImagePath
+)
+
 $code = @"
 using System;
 using System.Drawing;
-using System.Windows.Forms;
-using System.IO;
+using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
 using System.Collections.Generic;
 
-public class BoundsFinderForm : Form
+public class BoundsRecord
 {
-    private PictureBox pb;
-    private Button btnLoad;
-    private Bitmap currentBmp;
+    public int X;
+    public int Y;
+    public int Width;
+    public int Height;
+    public string Label;
+}
 
-    public BoundsFinderForm()
+public class BoundsFinder
+{
+    public static BoundsRecord[] GetRectangles(string imagePath)
     {
-        this.Text = "Visor de Límites de Imagen";
-        this.Size = new Size(1024, 768);
-        this.WindowState = FormWindowState.Maximized;
-
-        Panel panelTop = new Panel();
-        panelTop.Dock = DockStyle.Top;
-        panelTop.Height = 50;
-        this.Controls.Add(panelTop);
-
-        btnLoad = new Button();
-        btnLoad.Text = "Cargar Imagen";
-        btnLoad.Location = new Point(10, 10);
-        btnLoad.AutoSize = true;
-        btnLoad.Font = new Font("Segoe UI", 10, FontStyle.Bold);
-        btnLoad.Click += BtnLoad_Click;
-        panelTop.Controls.Add(btnLoad);
-
-        pb = new PictureBox();
-        pb.Dock = DockStyle.Fill;
-        pb.SizeMode = PictureBoxSizeMode.Zoom;
-        pb.BackColor = Color.LightGray;
-        this.Controls.Add(pb);
-        pb.BringToFront();
-    }
-
-    private void BtnLoad_Click(object sender, EventArgs e)
-    {
-        using (OpenFileDialog ofd = new OpenFileDialog())
+        using (Bitmap sourceBmp = new Bitmap(imagePath))
+        using (Bitmap originalBmp = new Bitmap(sourceBmp.Width, sourceBmp.Height, PixelFormat.Format32bppArgb))
         {
-            ofd.Filter = "Imágenes|*.jpg;*.jpeg;*.png;*.bmp";
-            ofd.Title = "Seleccionar imagen a analizar";
-            if (ofd.ShowDialog() == DialogResult.OK)
+            using (Graphics g = Graphics.FromImage(originalBmp))
             {
-                ProcessImage(ofd.FileName);
-            }
-        }
-    }
-
-    public void ProcessImage(string filename)
-    {
-        if (currentBmp != null) currentBmp.Dispose();
-
-        Bitmap original = new Bitmap(filename);
-        currentBmp = new Bitmap(original);
-        
-        int cols = 5;
-        int rows = 4;
-        double cellW = original.Width / (double)cols;
-        double cellH = original.Height / (double)rows;
-
-        List<Color> bgColors = new List<Color>();
-        for (int x = 0; x < original.Width; x += 10)
-        {
-            bgColors.Add(original.GetPixel(x, 0));
-            bgColors.Add(original.GetPixel(x, original.Height - 1));
-        }
-        for (int y = 0; y < original.Height; y += 10)
-        {
-            bgColors.Add(original.GetPixel(0, y));
-            bgColors.Add(original.GetPixel(original.Width - 1, y));
-        }
-
-        using (Graphics g = Graphics.FromImage(currentBmp))
-        {
-            // Dibujar cuadrícula de fondo referencial (opcional)
-            using (Pen gridPen = new Pen(Color.FromArgb(100, Color.Blue), 1))
-            {
-                gridPen.DashStyle = System.Drawing.Drawing2D.DashStyle.Dash;
-                for (int c = 1; c < cols; c++) g.DrawLine(gridPen, (int)(c * cellW), 0, (int)(c * cellW), original.Height);
-                for (int r = 1; r < rows; r++) g.DrawLine(gridPen, 0, (int)(r * cellH), original.Width, (int)(r * cellH));
+                g.DrawImage(sourceBmp, 0, 0);
             }
 
-            int penThickness = Math.Max(2, original.Width / 400);
-            using (Pen pen = new Pen(Color.Red, penThickness))
+            Rectangle rectLock = new Rectangle(0, 0, originalBmp.Width, originalBmp.Height);
+            BitmapData bmpData = originalBmp.LockBits(rectLock, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            int bytesPerPixel = 4;
+            int byteCount = Math.Abs(bmpData.Stride) * originalBmp.Height;
+            byte[] pixels = new byte[byteCount];
+            Marshal.Copy(bmpData.Scan0, pixels, 0, byteCount);
+            originalBmp.UnlockBits(bmpData);
+
+            int width = originalBmp.Width;
+            int height = originalBmp.Height;
+
+            List<Color> bgColors = new List<Color>();
+            for (int x = 0; x < width; x += 10)
             {
-                for (int r = 0; r < rows; r++)
+                int p1 = (x * bytesPerPixel);
+                bgColors.Add(Color.FromArgb(pixels[p1 + 2], pixels[p1 + 1], pixels[p1]));
+                int p2 = ((height - 1) * bmpData.Stride) + (x * bytesPerPixel);
+                bgColors.Add(Color.FromArgb(pixels[p2 + 2], pixels[p2 + 1], pixels[p2]));
+            }
+            for (int y = 0; y < height; y += 10)
+            {
+                int p1 = (y * bmpData.Stride);
+                bgColors.Add(Color.FromArgb(pixels[p1 + 2], pixels[p1 + 1], pixels[p1]));
+                int p2 = (y * bmpData.Stride) + ((width - 1) * bytesPerPixel);
+                bgColors.Add(Color.FromArgb(pixels[p2 + 2], pixels[p2 + 1], pixels[p2]));
+            }
+
+            bool[] colHasFg = new bool[width];
+            bool[] rowHasFg = new bool[height];
+
+            for (int y = 0; y < height; y++)
+            {
+                int rowOffset = y * bmpData.Stride;
+                for (int x = 0; x < width; x++)
                 {
-                    for (int c = 0; c < cols; c++)
+                    int pixelOffset = rowOffset + (x * bytesPerPixel);
+                    byte b = pixels[pixelOffset];
+                    byte gCol = pixels[pixelOffset + 1];
+                    byte red = pixels[pixelOffset + 2];
+
+                    bool isBg = false;
+                    foreach(var bg in bgColors)
                     {
-                        if (r == 3 && c == 4) continue;
-
-                        int startX = (int)(c * cellW);
-                        int startY = (int)(r * cellH);
-                        int endX = (int)((c + 1) * cellW);
-                        int endY = (int)((r + 1) * cellH);
-
-                        int minX = endX, minY = endY, maxX = startX, maxY = startY;
-
-                        for (int y = startY; y < endY; y++)
+                        int dr = red - bg.R;
+                        int dg = gCol - bg.G;
+                        int db = b - bg.B;
+                        // Umbral muy estricto para no comerse las sombras de los dibujos
+                        if (dr*dr + dg*dg + db*db < 150) 
                         {
-                            for (int x = startX; x < endX; x++)
-                            {
-                                Color p = original.GetPixel(x, y);
-
-                                bool isBg = false;
-                                foreach(var bg in bgColors)
-                                {
-                                    int dr = p.R - bg.R;
-                                    int dg = p.G - bg.G;
-                                    int db = p.B - bg.B;
-                                    if (dr*dr + dg*dg + db*db < 800) 
-                                    {
-                                        isBg = true;
-                                        break;
-                                    }
-                                }
-                                
-                                if (!isBg)
-                                {
-                                    if (x < minX) minX = x;
-                                    if (x > maxX) maxX = x;
-                                    if (y < minY) minY = y;
-                                    if (y > maxY) maxY = y;
-                                }
-                            }
+                            isBg = true;
+                            break;
                         }
-
-                        if (minX <= maxX && minY <= maxY)
-                        {
-                            g.DrawRectangle(pen, minX, minY, maxX - minX, maxY - minY);
-                            
-                            // Etiqueta para saber qué fila y columna es (opcional)
-                            string label = $"F{r+1} C{c+1}";
-                            Font font = new Font("Arial", penThickness * 4, FontStyle.Bold);
-                            g.DrawString(label, font, Brushes.Yellow, minX, minY > 20 ? minY - (penThickness*5) : minY);
-                        }
+                    }
+                    if (!isBg)
+                    {
+                        colHasFg[x] = true;
+                        rowHasFg[y] = true;
                     }
                 }
             }
-        }
 
-        pb.Image = currentBmp;
-        original.Dispose();
+            List<Point> xRanges = new List<Point>();
+            int curStartX = -1;
+            for(int x = 0; x < width; x++) {
+                if(colHasFg[x]) {
+                    if(curStartX == -1) curStartX = x;
+                } else {
+                    if(curStartX != -1) {
+                        xRanges.Add(new Point(curStartX, x - curStartX));
+                        curStartX = -1;
+                    }
+                }
+            }
+            if(curStartX != -1) xRanges.Add(new Point(curStartX, width - curStartX));
+
+            List<Point> yRanges = new List<Point>();
+            int curStartY = -1;
+            for(int y = 0; y < height; y++) {
+                if(rowHasFg[y]) {
+                    if(curStartY == -1) curStartY = y;
+                } else {
+                    if(curStartY != -1) {
+                        yRanges.Add(new Point(curStartY, y - curStartY));
+                        curStartY = -1;
+                    }
+                }
+            }
+            if(curStartY != -1) yRanges.Add(new Point(curStartY, height - curStartY));
+
+            List<BoundsRecord> results = new List<BoundsRecord>();
+            int rowIdx = 1;
+
+            foreach(var yR in yRanges) {
+                int colIdx = 1;
+                foreach(var xR in xRanges) {
+                    bool hasFg = false;
+                    int endX = xR.X + xR.Y;
+                    int endY = yR.X + yR.Y;
+                    int tMinX = endX, tMinY = endY, tMaxX = xR.X, tMaxY = yR.X;
+
+                    for(int y = yR.X; y < endY; y++) {
+                        int rowOffset = y * bmpData.Stride;
+                        for(int x = xR.X; x < endX; x++) {
+                            int pixelOffset = rowOffset + (x * bytesPerPixel);
+                            byte b = pixels[pixelOffset];
+                            byte gCol = pixels[pixelOffset + 1];
+                            byte red = pixels[pixelOffset + 2];
+                            bool isBg = false;
+                            foreach(var bg in bgColors) {
+                                int dr = red - bg.R; int dg = gCol - bg.G; int db = b - bg.B;
+                                if(dr*dr + dg*dg + db*db < 150) { isBg = true; break; }
+                            }
+                            if(!isBg) {
+                                hasFg = true;
+                                if(x < tMinX) tMinX = x;
+                                if(x > tMaxX) tMaxX = x;
+                                if(y < tMinY) tMinY = y;
+                                if(y > tMaxY) tMaxY = y;
+                            }
+                        }
+                    }
+                    if(hasFg) {
+                        BoundsRecord rec = new BoundsRecord();
+                        rec.X = tMinX;
+                        rec.Y = tMinY;
+                        rec.Width = tMaxX - tMinX + 1;
+                        rec.Height = tMaxY - tMinY + 1;
+                        rec.Label = string.Format("F{0} C{1}", rowIdx, colIdx);
+                        results.Add(rec);
+                        colIdx++;
+                    }
+                }
+                rowIdx++;
+            }
+
+            return results.ToArray();
+        }
     }
 }
 "@
 
-Add-Type -TypeDefinition $code -ReferencedAssemblies "System.Drawing", "System.Windows.Forms"
+if (-not ("BoundsFinder" -as [type])) {
+    Add-Type -TypeDefinition $code -ReferencedAssemblies "System.Drawing"
+}
 
-# Habilitar estilos visuales nativos de Windows
-[System.Windows.Forms.Application]::EnableVisualStyles()
-$form = New-Object BoundsFinderForm
-[System.Windows.Forms.Application]::Run($form)
+[BoundsFinder]::GetRectangles($ImagePath)

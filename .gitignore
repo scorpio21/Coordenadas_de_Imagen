@@ -1,8 +1,17 @@
-# Ignore visual studio code environment
-.vscode/
-
-# Ignore image files since they are just test data and can be heavy 
+# Archivos generados temporalmente o imágenes
+*.png
 *.jpg
 *.jpeg
-*.png
 *.bmp
+*.gif
+
+# Exportaciones autogeneradas por el usuario
+Coordenadas.md
+*.md
+!README.md
+!task.md
+
+# Archivos temporales de sistema 
+*.zip
+*.rar
+.ps1_xml
